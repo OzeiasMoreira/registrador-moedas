@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+# foto de banco de imagens com marca d agua (nao e do grupo)
+fotos/moeda1real.webp
+resultados/*moeda1real*

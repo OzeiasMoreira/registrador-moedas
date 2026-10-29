@@ -1,0 +1,28 @@
+CAIXA REGISTRADORA DE MOEDAS - Visao Computacional (Avaliacao 2)
+Integrantes: <preencher>
+
+O QUE FAZ
+Recebe fotos de moedas brasileiras sobre uma mesa, acha cada moeda, descobre o
+valor e mostra a soma (ex.: "R$ 2,35"). Conceitos novos: Transformada de Hough
+para circulos + segmentacao por cor no espaco HSV.
+
+COMO RODAR
+1) pip install -r requirements.txt        (opencv-python 4.10.0.84)
+2) Coloque suas fotos na pasta fotos/ (fundo liso, luz uniforme)
+3) Rodar numa foto ou pasta:
+       python moedas.py fotos/ --saida resultados/
+       python moedas.py fotos/foto01.jpg --debug     (mostra H,S,V de cada moeda)
+4) Avaliar (tabela de acertos + matriz de confusao):
+       preencha gabarito.csv (uma linha por foto, moedas em centavos: "100 50 25 5")
+       python avaliar.py fotos/ gabarito.csv
+   Saidas em resultados/: imagens marcadas, tabela_acertos.csv,
+   matriz_confusao.csv e matriz_confusao.png
+
+TESTE SEM FOTOS REAIS
+       python gerar_sinteticas.py
+       python avaliar.py fotos_sinteticas gabarito_sinteticas.csv
+
+ARQUIVOS
+moedas.py            pipeline completo (comentado)
+avaliar.py           comparacao com o gabarito, % de acerto, matriz de confusao
+gerar_sinteticas.py  gera imagens de teste artificiais
