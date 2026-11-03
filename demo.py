@@ -2,10 +2,10 @@
 Demonstracao passo a passo para a apresentacao.
 
 Uso:
-    python demo.py fotos/foto01.jpg
-    python demo.py fotos_sinteticas/sint01.png
+    python demo.py fotos/foto01.jpg              (so a imagem de resultado)
+    python demo.py fotos/foto01.jpg --etapas     (mostra tambem cada etapa do pipeline)
 
-Abre uma janela com as etapas do pipeline. Teclas:
+Abre uma janela com a imagem de resultado (valor de cada moeda e total). Teclas:
     ESPACO / seta direita = proxima etapa     seta esquerda = etapa anterior
     S = salva a montagem em resultados/demo_<foto>.png      Q ou ESC = sair
 Se nao houver tela (ou cv2.imshow falhar), so salva a montagem.
@@ -72,19 +72,25 @@ def montagem(lista):
 
 
 def main():
-    if len(sys.argv) != 2:
+    args = [a for a in sys.argv[1:] if a != "--etapas"]
+    if len(args) != 1:
         print(__doc__)
         return
-    caminho = Path(sys.argv[1])
+    completo = "--etapas" in sys.argv
+    caminho = Path(args[0])
     img = cv2.imread(str(caminho))
     if img is None:
         print("nao consegui abrir", caminho)
         return
-    lista = etapas(img)
     Path("resultados").mkdir(exist_ok=True)
-    destino = Path("resultados") / ("demo_%s.png" % caminho.stem)
-    cv2.imwrite(str(destino), montagem(lista))
-    print("montagem salva em", destino)
+    if completo:
+        lista = etapas(img)
+        destino = Path("resultados") / ("demo_%s.png" % caminho.stem)
+    else:                                    # padrao: so a imagem de resultado
+        lista = [M.desenhar(M.processar(img))]
+        destino = Path("resultados") / ("%s_resultado.png" % caminho.stem)
+    cv2.imwrite(str(destino), montagem(lista) if completo else lista[0])
+    print("resultado salvo em", destino)
 
     i = 0
     try:
@@ -105,7 +111,7 @@ def main():
             elif k == 2424832:                # seta esquerda
                 i = max(i - 1, 0)
             elif k in (ord("s"), ord("S")):
-                cv2.imwrite(str(destino), montagem(lista))
+                cv2.imwrite(str(destino), montagem(lista) if completo else lista[0])
         cv2.destroyAllWindows()
     except cv2.error:
         print("(sem janela disponivel: so a montagem foi salva)")

@@ -18,6 +18,13 @@ COMO RODAR
    Saidas em resultados/: imagens marcadas, tabela_acertos.csv,
    matriz_confusao.csv e matriz_confusao.png
 
+CAMERA AO VIVO
+       python camera.py                (ESPACO tira a foto e salva em fotos/; Q sai)
+       python camera.py --camera 1     (outra camera)
+
+PASSO A PASSO PARA A APRESENTACAO
+       python demo.py fotos/NOME_DA_FOTO.jpg    (imagem de resultado; use --etapas para ver o pipeline)
+
 TESTE SEM FOTOS REAIS
        python gerar_sinteticas.py
        python avaliar.py fotos_sinteticas gabarito_sinteticas.csv

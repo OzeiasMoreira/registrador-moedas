@@ -43,7 +43,7 @@ LARGURA = 1000            # largura padrao da imagem de trabalho (px)
 # (a faixa de raios das moedas e calculada sozinha a partir da mascara)
 HOUGH_DP = 1.2            # resolucao do acumulador (1 = igual a imagem)
 HOUGH_PARAM1 = 120        # limiar alto do Canny interno
-HOUGH_PARAM2 = 40         # votos minimos para aceitar um circulo (menor = mais circulos)
+HOUGH_PARAM2 = 28         # votos minimos para aceitar um circulo (menor = mais circulos)
 FATOR_OTSU = 0.4          # fracao do limiar de Otsu usada na mascara
 LIMIAR_MIN = 12           # limiar minimo (acima do ruido da camera)
 FRACAO_FUNDO_MIN = 0.70   # % do circulo que precisa estar no primeiro plano
@@ -104,9 +104,11 @@ def faixa_de_raios(mascara):
     dist = cv2.distanceTransform(mascara, cv2.DIST_L2, 5)
     n, rotulos = cv2.connectedComponents(mascara)
     picos = [dist[rotulos == i].max() for i in range(1, n)]
-    picos = [p for p in picos if p >= mascara.shape[1] * 0.008]   # ignora sujeira
     if not picos:
         return None
+    # textura da mesa/tecido gera manchinhas pequenas: so vale quem tem pelo menos
+    # 55% do pico do maior objeto (a menor moeda e ~74% da maior)
+    picos = [p for p in picos if p >= 0.55 * max(picos)]
     return max(5, int(0.6 * min(picos))), int(1.25 * max(picos)) + 1
 
 
@@ -117,7 +119,7 @@ def detectar_circulos(cinza, mascara):
     if faixa is None:
         return []
     r_min, r_max = faixa
-    suave = cv2.medianBlur(cinza, 5)
+    suave = cv2.medianBlur(cinza, 11)   # borra a textura da mesa (tecido, madeira)
     circ = cv2.HoughCircles(suave, cv2.HOUGH_GRADIENT, dp=HOUGH_DP,
                             minDist=r_min * 1.8, param1=HOUGH_PARAM1,
                             param2=HOUGH_PARAM2, minRadius=r_min, maxRadius=r_max)
@@ -133,20 +135,34 @@ def detectar_circulos(cinza, mascara):
     return aceitos
 
 
-def medir_raio(mascara, x, y, r_hough):
-    """Refina o raio: dispara 72 raios a partir do centro ate sair da mascara.
+def medir_raio(cinza, x, y, r_hough):
+    """Refina o raio olhando a borda de verdade: 72 raios a partir do centro.
 
-    O Hough acerta bem o centro, mas o raio pode variar alguns pixels (e as vezes
-    ele prende no circulo interno de moedas bimetalicas). A mediana dos 72 raios
-    ignora os poucos que atravessam uma moeda vizinha encostada."""
+    Em cada raio procuramos, entre 0,75 e 1,3 do raio do Hough, onde o brilho muda
+    mais bruscamente (a borda da moeda). A mediana dos 72 valores ignora raios
+    atrapalhados por sombra, reflexo ou uma moeda vizinha encostada.
+    (A mascara nao serve para isso: ela inclui a sombra da moeda.)"""
+    h, w = cinza.shape
+    ang = np.linspace(0, 2 * np.pi, 72, endpoint=False)
+    passos = np.arange(max(3, int(r_hough * 0.75)), int(r_hough * 1.3) + 2)
+    xs = np.clip(np.rint(x + np.outer(np.cos(ang), passos)).astype(int), 0, w - 1)
+    ys = np.clip(np.rint(y + np.outer(np.sin(ang), passos)).astype(int), 0, h - 1)
+    perfil = cinza[ys, xs].astype(np.float32)
+    grad = np.abs(perfil[:, 2:] - perfil[:, :-2])           # variacao de brilho ao longo do raio
+    melhor = passos[1:-1][np.argmax(grad, axis=1)]
+    return float(np.median(melhor))
+
+
+def raio_mascara(mascara, x, y, r_ref):
+    """Raio pela mascara (mediana de 72 raios). So serve para flagrar o caso em que o
+    Hough prendeu no circulo interno de uma moeda bimetalica."""
     h, w = mascara.shape
     ang = np.linspace(0, 2 * np.pi, 72, endpoint=False)
-    ini = int(r_hough * 0.6)          # ignora buracos de reflexo perto do centro
-    passos = np.arange(ini, int(r_hough * 1.6))
+    ini = int(r_ref * 0.6)
+    passos = np.arange(ini, int(r_ref * 2.2))
     xs = np.clip((x + np.outer(np.cos(ang), passos)).astype(int), 0, w - 1)
     ys = np.clip((y + np.outer(np.sin(ang), passos)).astype(int), 0, h - 1)
     dentro = mascara[ys, xs] > 0
-    # primeiro passo em que o raio sai da moeda
     saiu = np.where(dentro.all(axis=1), len(passos), np.argmin(dentro, axis=1))
     return float(ini + np.median(saiu))
 
@@ -209,10 +225,14 @@ def processar(img_bgr, escala_manual=None):
     cinza = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     mascara = mascara_primeiro_plano(cinza)
+    suave = cv2.GaussianBlur(cinza, (5, 5), 0)
 
     moedas = []
     for x, y, r_h in detectar_circulos(cinza, mascara):
-        r = medir_raio(mascara, x, y, r_h)
+        r = medir_raio(suave, x, y, r_h)
+        r_m = raio_mascara(mascara, x, y, r_h)
+        if r_m > 1.5 * r:             # Hough prendeu no circulo interno (R$1,00): usa o externo
+            r = medir_raio(suave, x, y, r_m)
         f = cores_da_moeda(hsv, x, y, r)
         moedas.append({"x": x, "y": y, "r": r, "r_hough": r_h, "feat": f,
                        "material": material(f)})
