@@ -60,11 +60,16 @@ def main():
         if ultimo is None:
             cv2.imshow(janela, M.redimensionar(quadro))
         else:
-            vista = M.desenhar(ultimo)
             total, qtd = Counter(historico).most_common(1)[0][0]
+            # so desenha moedas se a deteccao e estavel (mesma contagem nos ultimos quadros)
+            estavel = len(historico) >= 3 and len({q for _, q in list(historico)[-3:]}) == 1
+            if qtd == 0 or not estavel:
+                vista = M.redimensionar(quadro)
+            else:
+                vista = M.desenhar(ultimo)
             cv2.rectangle(vista, (0, 0), (vista.shape[1], 50), (0, 0, 0), -1)
-            cv2.putText(vista, "%s  (%d moedas)" % (M.reais(total), qtd), (15, 36),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 0), 2)
+            texto = "Nenhuma moeda" if qtd == 0 else "%s  (%d moedas)" % (M.reais(total), qtd)
+            cv2.putText(vista, texto, (15, 36), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 255, 0), 2)
             cv2.putText(vista, "ESPACO = foto | Q = sair", (vista.shape[1] - 330, 36),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
             cv2.imshow(janela, vista)

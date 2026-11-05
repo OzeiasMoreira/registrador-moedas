@@ -46,7 +46,10 @@ HOUGH_PARAM1 = 120        # limiar alto do Canny interno
 HOUGH_PARAM2 = 28         # votos minimos para aceitar um circulo (menor = mais circulos)
 FATOR_OTSU = 0.4          # fracao do limiar de Otsu usada na mascara
 LIMIAR_MIN = 12           # limiar minimo (acima do ruido da camera)
-FRACAO_FUNDO_MIN = 0.70   # % do circulo que precisa estar no primeiro plano
+RAIO_MIN_CENA = 0.025     # raio minimo de busca = 2,5% da largura da foto
+BORDA_TOLERANCIA = 0.08   # a borda pode estar ate 8% do raio fora do lugar
+BORDA_CONSIST_MIN = 0.70  # % dos raios com borda no lugar certo para ser moeda
+BORDA_CONSIST_ENCOSTADA = 0.60  # minimo se a moeda encosta em outra ja aceita
 SAT_PRATA = 55            # saturacao (0-255) abaixo disso = metal "cinza/prata"
 DELTA_SAT_BIMETAL = 45    # diferenca de saturacao centro x borda = moeda bimetalica
 HUE_COBRE_MAX = 14        # matiz (0-179) abaixo disso = cobre; acima = dourada
@@ -109,11 +112,14 @@ def faixa_de_raios(mascara):
     # textura da mesa/tecido gera manchinhas pequenas: so vale quem tem pelo menos
     # 55% do pico do maior objeto (a menor moeda e ~74% da maior)
     picos = [p for p in picos if p >= 0.55 * max(picos)]
-    return max(5, int(0.6 * min(picos))), int(1.25 * max(picos)) + 1
+    # Numa cena bagunçada (rosto, mao, roupa) os objetos grandes da mascara escondem as
+    # moedas pequenas; por isso o raio minimo nunca passa de RAIO_MIN_CENA da largura.
+    r_min = min(int(0.6 * min(picos)), int(RAIO_MIN_CENA * mascara.shape[1]))
+    return max(5, r_min), int(1.25 * max(picos)) + 1
 
 
 def detectar_circulos(cinza, mascara):
-    """Hough para circulos; descarta circulos que caem no fundo."""
+    """Hough para circulos: devolve os candidatos (a validacao vem depois)."""
     h, w = cinza.shape
     faixa = faixa_de_raios(mascara)
     if faixa is None:
@@ -125,14 +131,7 @@ def detectar_circulos(cinza, mascara):
                             param2=HOUGH_PARAM2, minRadius=r_min, maxRadius=r_max)
     if circ is None:
         return []
-    aceitos = []
-    for x, y, r in circ[0]:
-        disco = np.zeros_like(mascara)
-        cv2.circle(disco, (int(x), int(y)), int(r), 255, -1)
-        dentro = cv2.countNonZero(cv2.bitwise_and(mascara, disco)) / max(1, cv2.countNonZero(disco))
-        if dentro >= FRACAO_FUNDO_MIN:
-            aceitos.append((float(x), float(y), float(r)))
-    return aceitos
+    return [(float(x), float(y), float(r)) for x, y, r in circ[0]]
 
 
 def medir_raio(cinza, x, y, r_hough):
@@ -151,6 +150,22 @@ def medir_raio(cinza, x, y, r_hough):
     grad = np.abs(perfil[:, 2:] - perfil[:, :-2])           # variacao de brilho ao longo do raio
     melhor = passos[1:-1][np.argmax(grad, axis=1)]
     return float(np.median(melhor))
+
+
+def borda_consistente(cinza, x, y, r):
+    """Fracao dos 72 raios cuja borda mais forte esta mesmo no raio r.
+
+    Moeda de verdade tem a borda circular em (quase) todas as direcoes. Rosto, mao,
+    roupa ou sombra ate geram um "circulo", mas a borda some em varias direcoes."""
+    h, w = cinza.shape
+    ang = np.linspace(0, 2 * np.pi, 72, endpoint=False)
+    passos = np.arange(max(3, int(r * 0.75)), int(r * 1.3) + 2)
+    xs = np.clip(np.rint(x + np.outer(np.cos(ang), passos)).astype(int), 0, w - 1)
+    ys = np.clip(np.rint(y + np.outer(np.sin(ang), passos)).astype(int), 0, h - 1)
+    perfil = cinza[ys, xs].astype(np.float32)
+    grad = np.abs(perfil[:, 2:] - perfil[:, :-2])
+    pico = passos[1:-1][np.argmax(grad, axis=1)]
+    return float(np.mean(np.abs(pico - r) <= BORDA_TOLERANCIA * r))
 
 
 def raio_mascara(mascara, x, y, r_ref):
@@ -227,15 +242,30 @@ def processar(img_bgr, escala_manual=None):
     mascara = mascara_primeiro_plano(cinza)
     suave = cv2.GaussianBlur(cinza, (5, 5), 0)
 
-    moedas = []
+    candidatos = []
     for x, y, r_h in detectar_circulos(cinza, mascara):
-        r = medir_raio(suave, x, y, r_h)
+        # Tres estimativas do raio: borda refinada, Hough e mascara. Vale a que tem a
+        # borda circular mais "completa" (e ela decide tambem se e uma moeda ou nao).
         r_m = raio_mascara(mascara, x, y, r_h)
-        if r_m > 1.5 * r:             # Hough prendeu no circulo interno (R$1,00): usa o externo
-            r = medir_raio(suave, x, y, r_m)
+        r_e = medir_raio(suave, x, y, r_h)
+        if r_m > 1.5 * r_e:           # Hough prendeu no circulo interno (R$1,00): olha o externo
+            r_e = medir_raio(suave, x, y, r_m)
+        cand = [r_e, r_h, r_m]
+        notas = [borda_consistente(suave, x, y, c) for c in cand]
+        candidatos.append((x, y, cand[int(np.argmax(notas))], max(notas)))
+
+    # 1a passada: borda circular bem definida. 2a: borda parcialmente tapada, aceita so
+    # se a moeda encosta em outra ja aceita (a vizinha explica a borda que falta).
+    aceitos = [c for c in candidatos if c[3] >= BORDA_CONSIST_MIN]
+    for x, y, r, nota in candidatos:
+        if BORDA_CONSIST_ENCOSTADA <= nota < BORDA_CONSIST_MIN and any(
+                np.hypot(x - a[0], y - a[1]) <= r + a[2] + 6 for a in aceitos):
+            aceitos.append((x, y, r, nota))
+
+    moedas = []
+    for x, y, r, _ in aceitos:
         f = cores_da_moeda(hsv, x, y, r)
-        moedas.append({"x": x, "y": y, "r": r, "r_hough": r_h, "feat": f,
-                       "material": material(f)})
+        moedas.append({"x": x, "y": y, "r": r, "feat": f, "material": material(f)})
     moedas = remover_duplicadas(moedas)
 
     escala = estimar_escala(moedas, escala_manual)
